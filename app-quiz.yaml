@@ -6,7 +6,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/<YOU>/<REPO>.git   # <- change this
+    repoURL: https://github.com/deenamanick/argocd-example.git
     targetRevision: main
     path: quiz-app
   destination:
