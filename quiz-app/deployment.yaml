@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: quiz-app
+  labels: { app: quiz-app }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: quiz-app }
+  template:
+    metadata:
+      labels: { app: quiz-app }
+    spec:
+      containers:
+        - name: quiz-app
+          image: deenamanick/quiz-app-v1:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            tcpSocket: { port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket: { port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: "100m", memory: "128Mi" }
+            limits:   { cpu: "300m", memory: "256Mi" }
