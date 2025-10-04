@@ -260,6 +260,137 @@ curl -I http://<any-node-IP>:31080
 
 
 
+## Try this if you are running in Vagrant
+
+
+That message just means you tried to read logs from the **main** container while the **init** container (`secret-init`) is still running/failing. Do this:
+
+## 1) See why the init container is failing
+
+```bash
+# get pod name first if needed
+kubectl -n argocd get pod -l app.kubernetes.io/name=argocd-redis
+
+# init-container logs
+kubectl -n argocd logs pod/argocd-redis-548cd9cb7f-zp5jm -c secret-init --tail=100
+
+# also check events
+kubectl -n argocd describe pod argocd-redis-548cd9cb7f-zp5jm | sed -n '1,160p'
+```
+
+You’ll typically see either **cannot reach [https://10.96.0.1:443](https://10.96.0.1:443)** (networking) or **Forbidden** (RBAC) or **Secret not found**.
+
+---
+
+## 2) Fast “force-fix” (create the expected secret with the right key)
+
+```bash
+# discover which key Redis expects from the secret (usually 'auth')
+KEY=$(kubectl -n argocd get deploy argocd-redis \
+  -o jsonpath='{.spec.template.spec.containers[?(@.name=="redis")].env[?(@.name=="REDIS_PASSWORD")].valueFrom.secretKeyRef.key}')
+
+# create/update the secret with that key
+kubectl -n argocd create secret generic argocd-redis \
+  --from-literal=${KEY}="$(tr -dc A-Za-z0-9 </dev/urandom | head -c 32)" \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# restart to pick it up
+kubectl -n argocd rollout restart deploy/argocd-redis
+```
+
+Recheck:
+
+```bash
+kubectl -n argocd get pods -w
+```
+
+---
+
+## 3) If logs show **API timeout** from `secret-init`
+
+Service routing is still broken. Quick probe + fix:
+
+```bash
+# from the argocd ns, can a pod reach the API?
+kubectl -n argocd run netcheck --rm -it --image=busybox --restart=Never -- sh -c \
+'wget -qO- --timeout=5 https://kubernetes.default.svc:443 >/dev/null && echo OK || echo FAIL'
+
+# if FAIL:
+kubectl -n kube-system get ds kube-proxy
+kubectl -n kube-system logs ds/kube-proxy --tail=200
+# on every node:
+sudo modprobe br_netfilter || true
+sudo sysctl -w net.bridge.bridge-nf-call-iptables=1
+sudo sysctl -w net.ipv4.ip_forward=1
+```
+
+---
+
+## 4) If logs show **Forbidden** creating the secret
+
+Either keep step 2 (you already created the secret so init can exit), or grant minimal RBAC to the SA running argocd-redis:
+
+```bash
+SA=$(kubectl -n argocd get deploy argocd-redis -o jsonpath='{.spec.template.spec.serviceAccountName}')
+cat <<'YAML' | kubectl apply -f -
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argocd-redis-secret-writer
+  namespace: argocd
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get","create","update","patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argocd-redis-secret-writer
+  namespace: argocd
+subjects:
+- kind: ServiceAccount
+  name: '"'"${SA}"'"'
+  namespace: argocd
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: argocd-redis-secret-writer
+YAML
+```
+
+Then:
+
+```bash
+kubectl -n argocd rollout restart deploy/argocd-redis
+```
+
+---
+
+## 5) (Last resort) Skip the init container
+
+If you’ve created the secret and just want Redis to start now:
+
+```bash
+kubectl -n argocd patch deploy argocd-redis --type=json \
+  -p='[{"op":"remove","path":"/spec/template/spec/initContainers"}]'
+```
+
+*(You can revert later when everything is healthy.)*
+
+---
+
+Once Redis is **Running/Ready**, the rest should settle:
+
+```bash
+kubectl -n argocd rollout status deploy/argocd-redis
+kubectl -n argocd rollout status deploy/argocd-repo-server
+kubectl -n argocd rollout status deploy/argocd-server
+kubectl -n argocd rollout status statefulset/argocd-application-controller
+```
+
+Run step **1** first and use the matching fix above; that’ll unblock the `PodInitializing` and get Argo CD fully green.
+
 
 
 
