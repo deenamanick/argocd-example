@@ -210,7 +210,31 @@ kubectl -n guestbook get svc
 
 ---
 
-## 4) (Optional) Use the CLI to inspect
+You don’t have the **argocd** CLI on that machine. Two quick ways forward:
+
+## Option 1 — Install the Argo CD CLI (Linux)
+
+```bash
+# check your arch
+uname -m
+# if x86_64:
+curl -sSL -o argocd-linux-amd64 \
+  https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+# if aarch64/arm64, use:
+# curl -sSL -o argocd-linux-amd64 \
+#   https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-arm64
+
+sudo install -m 555 argocd-linux-amd64 /usr/local/bin/argocd
+argocd version --client
+```
+
+Login (use your NodePort or port-forward URL; add `--insecure` for self-signed TLS):
+
+```bash
+argocd login <ARGOCD-HOST>:30443 --username admin --password '<your-pass>' --insecure
+```
+
+Now the commands you tried will work:
 
 ```bash
 argocd app list
@@ -218,7 +242,22 @@ argocd app get guestbook
 argocd app history guestbook
 # force a resync
 argocd app sync guestbook
+
 ```
+
+## Option 2 — Verify without the CLI
+
+```bash
+# see what’s running
+kubectl -n quiz-app get deploy,svc,pods -o wide
+
+# describe the Argo CD Application CR
+kubectl -n argocd get application quiz-app -o yaml | sed -n '1,120p'
+
+# hit your app (NodePort from the Service)
+curl -I http://<any-node-IP>:31080
+```
+
 
 
 
